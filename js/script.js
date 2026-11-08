@@ -166,3 +166,459 @@ function initReservations() {
 }
 function initialize() { bookings = readBookings(); initNav(); initIntro(); initCategories(); initShowroom(); initAvailability(); initBooking(); initReservations(); }
 document.addEventListener('DOMContentLoaded', initialize);
+
+
+/* ITWS 02 - UNIT 6: DOM Manipulation */
+
+// Allows customers to compare up to 3 vehicles
+function initVehicleComparison() {
+    const grid = document.getElementById('showroom-grid');
+    if (!grid) return;
+
+    const selected = new Set();
+    const panel = document.createElement('section');
+    panel.id = 'compare-panel';
+    panel.className = 'compare-panel';
+    panel.hidden = true;
+    grid.insertAdjacentElement('afterend', panel);
+
+    function updateButtons() {
+        grid.querySelectorAll('.vehicle-card').forEach(card => {
+            const action = card.querySelector('[data-detail]');
+            if (!action) return;
+
+            const id = action.dataset.detail;
+            let button = card.querySelector('[data-compare]');
+
+            if (!button) {
+                button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'compare-toggle';
+                button.dataset.compare = id;
+
+                card.querySelector('.vehicle-actions')
+                    .insertAdjacentElement('afterend', button);
+            }
+
+            const active = selected.has(id);
+            button.textContent = active
+                ? '✓ Added to comparison'
+                : '+ Add to comparison';
+
+            button.classList.toggle('selected', active);
+            button.setAttribute('aria-pressed', String(active));
+        });
+    }
+
+    function renderComparison() {
+        panel.replaceChildren();
+        panel.hidden = selected.size === 0;
+
+        if (!selected.size) return;
+
+        const models = [...selected]
+            .map(id => getVehicle(id))
+            .filter(Boolean);
+
+        const heading = document.createElement('div');
+        heading.className = 'compare-heading';
+
+        const title = document.createElement('h2');
+        title.textContent = `Compare vehicles (${models.length}/3)`;
+
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.className = 'compare-clear';
+        clear.dataset.clearCompare = '';
+        clear.textContent = 'Clear all';
+
+        heading.append(title, clear);
+        panel.append(heading);
+
+        // Create removable vehicle labels
+        const chips = document.createElement('div');
+        chips.className = 'compare-chips';
+
+        models.forEach(vehicle => {
+            const chip = document.createElement('div');
+            chip.className = 'compare-chip';
+
+            const name = document.createElement('span');
+            name.textContent = vehicle.name;
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.dataset.removeCompare = vehicle.id;
+            remove.textContent = '×';
+            remove.setAttribute(
+                'aria-label',
+                `Remove ${vehicle.name} from comparison`
+            );
+
+            chip.append(name, remove);
+            chips.append(chip);
+        });
+
+        panel.append(chips);
+
+        if (models.length < 2) {
+            const hint = document.createElement('p');
+            hint.className = 'compare-hint';
+            hint.textContent =
+                'Select one more model to see a side-by-side comparison.';
+            panel.append(hint);
+            return;
+        }
+
+        // Dynamically create a semantic HTML table
+        const wrapper = document.createElement('div');
+        wrapper.className = 'compare-table-wrap';
+
+        const table = document.createElement('table');
+        table.className = 'compare-table';
+
+        const caption = document.createElement('caption');
+        caption.textContent =
+            'Selected vehicle specifications and illustrative prices';
+
+        const thead = document.createElement('thead');
+        const header = document.createElement('tr');
+
+        ['Feature', ...models.map(v => v.name)].forEach(label => {
+            const th = document.createElement('th');
+            th.scope = 'col';
+            th.textContent = label;
+            header.append(th);
+        });
+
+        thead.append(header);
+
+        const tbody = document.createElement('tbody');
+
+        const rows = [
+            ['Category', v => v.type],
+            ['Seats', v => String(v.seats)],
+            ['Transmission', v => v.gear],
+            ['Fuel', v => v.fuel],
+            ['Daily rate', v => peso.format(v.rate)]
+        ];
+
+        rows.forEach(([label, value]) => {
+            const tr = document.createElement('tr');
+            const th = document.createElement('th');
+
+            th.scope = 'row';
+            th.textContent = label;
+            tr.append(th);
+
+            models.forEach(vehicle => {
+                const td = document.createElement('td');
+                td.textContent = value(vehicle);
+                tr.append(td);
+            });
+
+            tbody.append(tr);
+        });
+
+        table.append(caption, thead, tbody);
+        wrapper.append(table);
+        panel.append(wrapper);
+    }
+
+    // Handle comparison button clicks
+    grid.addEventListener('click', event => {
+        const button = event.target.closest('[data-compare]');
+        if (!button) return;
+
+        const id = button.dataset.compare;
+
+        if (selected.has(id)) {
+            selected.delete(id);
+        } else if (selected.size >= 3) {
+            toast('You can compare up to three vehicles.');
+            return;
+        } else {
+            selected.add(id);
+        }
+
+        updateButtons();
+        renderComparison();
+    });
+
+    // Remove one vehicle or clear the comparison
+    panel.addEventListener('click', event => {
+        const remove = event.target.closest('[data-remove-compare]');
+
+        if (remove) {
+            selected.delete(remove.dataset.removeCompare);
+        } else if (event.target.closest('[data-clear-compare]')) {
+            selected.clear();
+        } else {
+            return;
+        }
+
+        updateButtons();
+        renderComparison();
+    });
+
+    // Refresh buttons when the existing showroom changes
+    document.getElementById('filter-pills')
+        .addEventListener('click', updateButtons);
+
+    document.getElementById('vehicle-search')
+        .addEventListener('input', updateButtons);
+
+    updateButtons();
+}
+
+
+/* ITWS 02 - UNIT 7: Client-Side Form Validation */
+
+function initBookingValidation() {
+    const form = document.getElementById('booking-form');
+    if (!form) return;
+
+    const ids = [
+        'booking-vehicle',
+        'booking-start',
+        'booking-end',
+        'customer-name',
+        'customer-phone',
+        'customer-email',
+        'customer-license'
+    ];
+
+    const fields = ids.map(id => document.getElementById(id));
+    const touched = new Set();
+    const messages = new Map();
+
+    let attempted = false;
+
+    // Create an inline feedback message for every input
+    fields.forEach(field => {
+        const message = document.createElement('span');
+        message.className = 'field-feedback';
+        message.id = `${field.id}-feedback`;
+        message.setAttribute('aria-live', 'polite');
+
+        field.insertAdjacentElement('afterend', message);
+        field.setAttribute('aria-describedby', message.id);
+
+        messages.set(field.id, message);
+    });
+
+    function checkField(field) {
+        const value = field.value.trim();
+        let error = '';
+
+        // Conditions and Regular Expressions (RegEx)
+        switch (field.id) {
+
+            case 'booking-vehicle':
+                if (!getVehicle(value)) {
+                    error = 'Please select a vehicle.';
+                }
+                break;
+
+            case 'booking-start':
+                if (!value) {
+                    error = 'Please select your pick-up date.';
+                } else if (value < localISO()) {
+                    error = 'Pick-up cannot be in the past.';
+                }
+                break;
+
+            case 'booking-end':
+                if (!value) {
+                    error = 'Please select your return date.';
+                } else if (
+                    value < document.getElementById('booking-start').value
+                ) {
+                    error = 'Return date cannot be earlier than pick-up.';
+                }
+                break;
+
+            case 'customer-name':
+                if (!value) {
+                    error = 'Please enter your full name.';
+                } else if (
+                    value.replace(/[^\p{L}]/gu, '').length < 3
+                ) {
+                    error = 'Enter at least 3 letters.';
+                } else if (
+                    !/^[\p{L}\p{M} .'-]+$/u.test(value)
+                ) {
+                    error = 'Use letters, spaces, apostrophes or hyphens.';
+                }
+                break;
+
+            case 'customer-phone':
+                if (!/^09\d{9}$/.test(value)) {
+                    error =
+                        'Enter 11 digits beginning with 09 (e.g., 09171234567).';
+                }
+                break;
+
+            case 'customer-email':
+                if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+                    error = 'Please enter a valid email address.';
+                }
+                break;
+
+            case 'customer-license':
+                if (!/^[A-Za-z0-9-]{5,24}$/.test(value)) {
+                    error =
+                        'Use 5–24 letters, numbers or hyphens (demo format only).';
+                }
+                break;
+        }
+
+        // HTML5 Constraint Validation API
+        field.setCustomValidity('');
+
+        if (!error && !field.validity.valid) {
+            error = field.validity.valueMissing
+                ? 'This field is required.'
+                : 'Please check this value.';
+        }
+
+        field.setCustomValidity(error);
+
+        // Display messages using DOM manipulation
+        const show = attempted || touched.has(field.id);
+        const message = messages.get(field.id);
+
+        message.textContent = show
+            ? (error || '✓ Looks good')
+            : '';
+
+        message.classList.toggle('error', show && Boolean(error));
+        message.classList.toggle('success', show && !error);
+
+        field.classList.toggle('input-invalid', show && Boolean(error));
+        field.classList.toggle('input-valid', show && !error);
+
+        field.setAttribute(
+            'aria-invalid',
+            String(show && Boolean(error))
+        );
+
+        return !error;
+    }
+
+    // Validate as the user enters information
+    fields.forEach(field => {
+        for (const type of ['input', 'change']) {
+            field.addEventListener(type, () => {
+                touched.add(field.id);
+                checkField(field);
+
+                if (field.id === 'booking-start') {
+                    checkField(
+                        document.getElementById('booking-end')
+                    );
+                }
+            });
+        }
+
+        field.addEventListener('blur', () => {
+            touched.add(field.id);
+            checkField(field);
+        });
+    });
+
+    // Prevent submission when information is invalid
+    form.addEventListener('submit', event => {
+        attempted = true;
+
+        const invalid = fields.find(field => !checkField(field));
+        fields.forEach(checkField);
+
+        if (!invalid) return;
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        invalid.focus();
+        invalid.reportValidity();
+    }, true);
+
+    // HTML5 may block invalid fields before submit is fired
+    form.addEventListener('invalid', event => {
+        attempted = true;
+
+        if (messages.has(event.target.id)) {
+            touched.add(event.target.id);
+            checkField(event.target);
+        }
+    }, true);
+
+
+    /* UNIT 6: Dynamic Booking Add-ons */
+
+    const addons = form.querySelector('.addons');
+
+    const chosenBox = document.createElement('div');
+    chosenBox.className = 'chosen-addons';
+    chosenBox.setAttribute('aria-live', 'polite');
+
+    addons.insertAdjacentElement('afterend', chosenBox);
+
+    function renderAddons() {
+        chosenBox.replaceChildren();
+
+        const options = [
+            ['addon-gps', 'GPS navigation'],
+            ['addon-cover', 'Extra coverage'],
+            ['addon-helmet', 'Helmet']
+        ];
+
+        const active = options.filter(([id]) =>
+            document.getElementById(id).checked
+        );
+
+        if (!active.length) {
+            const empty = document.createElement('span');
+            empty.textContent = 'No add-ons selected';
+            empty.className = 'addons-empty';
+            chosenBox.append(empty);
+        }
+
+        active.forEach(([id, label]) => {
+            const button = document.createElement('button');
+
+            button.type = 'button';
+            button.className = 'addon-chip';
+            button.textContent = `${label} ×`;
+            button.setAttribute('aria-label', `Remove ${label}`);
+
+            button.addEventListener('click', () => {
+                const checkbox = document.getElementById(id);
+                checkbox.checked = false;
+
+                checkbox.dispatchEvent(
+                    new Event('change', {bubbles: true})
+                );
+            });
+
+            chosenBox.append(button);
+        });
+
+        addons.querySelectorAll('.check-row').forEach(row => {
+            row.classList.toggle(
+                'picked',
+                row.querySelector('input').checked
+            );
+        });
+    }
+
+    form.addEventListener('change', renderAddons);
+    renderAddons();
+}
+
+
+// Initialize the new features after the original website
+document.addEventListener('DOMContentLoaded', () => {
+    initVehicleComparison();
+    initBookingValidation();
+});
